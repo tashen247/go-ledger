@@ -1,0 +1,12 @@
+DROP TRIGGER IF EXISTS settlements_state_machine ON settlements;
+DROP TRIGGER IF EXISTS ledger_entries_no_truncate ON ledger_entries;
+DROP TRIGGER IF EXISTS ledger_entries_no_update_delete ON ledger_entries;
+DROP FUNCTION IF EXISTS check_settlement_transition();
+DROP FUNCTION IF EXISTS forbid_ledger_mutation();
+DROP TABLE IF EXISTS dead_letters;
+DROP TABLE IF EXISTS settlements;
+DROP TABLE IF EXISTS idempotency_keys;
+DROP TABLE IF EXISTS ledger_entries;
+DROP TABLE IF EXISTS transactions;
+DROP TABLE IF EXISTS accounts;
+DROP TYPE IF EXISTS settlement_state;

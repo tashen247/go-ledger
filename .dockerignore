@@ -1,0 +1,6 @@
+.git
+bin
+feed
+uploads
+*.md
+.env
