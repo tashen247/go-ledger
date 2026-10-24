@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io"
 	"log/slog"
 	"os"
 
@@ -8,15 +9,21 @@ import (
 )
 
 func main() {
-	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	os.Exit(run(os.Stdout))
+}
+
+// run applies pending migrations and returns the process exit code.
+func run(stdout io.Writer) int {
+	log := slog.New(slog.NewJSONHandler(stdout, nil))
 	db := os.Getenv("DATABASE_URL")
 	if db == "" {
 		log.Error("config", "err", "DATABASE_URL is required")
-		os.Exit(2)
+		return 2
 	}
 	if err := schema.Up(db); err != nil {
 		log.Error("migrate", "err", err)
-		os.Exit(1)
+		return 1
 	}
 	log.Info("migrations applied")
+	return 0
 }

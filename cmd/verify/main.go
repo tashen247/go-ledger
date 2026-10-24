@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"time"
@@ -13,28 +14,35 @@ import (
 )
 
 func main() {
-	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	os.Exit(run(context.Background(), os.Stdout, os.Stderr))
+}
+
+// run verifies the hash chain and returns the process exit code. The result
+// line goes to stdout; logs go to stderr.
+func run(ctx context.Context, stdout, stderr io.Writer) int {
+	log := slog.New(slog.NewJSONHandler(stderr, nil))
 	cfg, err := config.FromEnv()
 	if err != nil {
 		log.Error("config", "err", err)
-		os.Exit(2)
+		return 2
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	db, err := store.Open(ctx, cfg.DatabaseURL, cfg.HMACKey)
 	if err != nil {
 		log.Error("database", "err", err)
-		os.Exit(1)
+		return 1
 	}
 	defer db.Close()
 	entries, err := db.ChainEntries(ctx)
 	if err != nil {
 		log.Error("load chain", "err", err)
-		os.Exit(1)
+		return 1
 	}
 	verified, first := ledger.Verify(db.HMACKey(), entries)
-	fmt.Println(ledger.ChainError(verified, first))
+	fmt.Fprintln(stdout, ledger.ChainError(verified, first))
 	if first != nil {
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }

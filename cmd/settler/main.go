@@ -17,23 +17,38 @@ import (
 )
 
 func main() {
-	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	fileFlag := flag.String("file", os.Getenv("LEDGER_FEED_FILE"), "JSONL settlement feed (default stdin)")
-	watch := flag.Bool("watch", false, "tail the file and apply appended lines")
-	flag.Parse()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	code := run(ctx, os.Args[1:], os.Stdin, os.Stdout)
+	stop()
+	os.Exit(code)
+}
+
+// run applies a JSONL settlement feed from a file or stdin, or tails a file
+// with -watch. It returns the process exit code: 0 when every line applied
+// or was parked, 1 when any line was rejected or a fatal error occurred, and
+// 2 for usage or configuration errors.
+func run(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer) int {
+	log := slog.New(slog.NewJSONHandler(stdout, nil))
+	fs := flag.NewFlagSet("settler", flag.ContinueOnError)
+	fileFlag := fs.String("file", os.Getenv("LEDGER_FEED_FILE"), "JSONL settlement feed (default stdin)")
+	watch := fs.Bool("watch", false, "tail the file and apply appended lines")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
+		return 2
+	}
 
 	cfg, err := config.FromEnv()
 	if err != nil {
 		log.Error("config", "err", err)
-		os.Exit(2)
+		return 2
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	db, err := store.Open(ctx, cfg.DatabaseURL, cfg.HMACKey)
 	if err != nil {
 		log.Error("database", "err", err)
-		os.Exit(1)
+		return 1
 	}
 	defer db.Close()
 	db.SetRetry(cfg.Retry, retry.WallClock{}, retry.MathRand{})
@@ -72,31 +87,32 @@ func main() {
 	case *watch:
 		if path == "" {
 			log.Error("watch requires -file or LEDGER_FEED_FILE")
-			os.Exit(2)
+			return 2
 		}
 		if err := settlement.Follow(ctx, path, handle); err != nil && !errors.Is(err, context.Canceled) {
 			log.Error("follow", "err", err)
-			os.Exit(1)
+			return 1
 		}
 	case path != "":
 		f, err := os.Open(path)
 		if err != nil {
 			log.Error("open feed", "err", err)
-			os.Exit(1)
+			return 1
 		}
 		defer f.Close()
 		if _, err := settlement.Process(ctx, f, handle); err != nil {
 			log.Error("process", "err", err)
-			os.Exit(1)
+			return 1
 		}
 	default:
-		if _, err := settlement.Process(ctx, os.Stdin, handle); err != nil && !errors.Is(err, io.EOF) {
+		if _, err := settlement.Process(ctx, stdin, handle); err != nil && !errors.Is(err, io.EOF) {
 			log.Error("process", "err", err)
-			os.Exit(1)
+			return 1
 		}
 	}
 	if failed > 0 {
 		log.Error("feed finished with rejected events", "failed", failed)
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }

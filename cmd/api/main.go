@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -17,25 +19,36 @@ import (
 )
 
 func main() {
-	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	code := run(ctx, os.Stdout)
+	stop()
+	os.Exit(code)
+}
+
+// run serves the HTTP API until ctx is cancelled, then shuts down gracefully.
+// It returns the process exit code.
+func run(ctx context.Context, stdout io.Writer) int {
+	log := slog.New(slog.NewJSONHandler(stdout, nil))
 	cfg, err := config.FromEnv()
 	if err != nil {
 		log.Error("config", "err", err)
-		os.Exit(2)
+		return 2
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	db, err := store.Open(ctx, cfg.DatabaseURL, cfg.HMACKey)
 	if err != nil {
 		log.Error("database", "err", err)
-		os.Exit(1)
+		return 1
 	}
 	defer db.Close()
 	db.SetRetry(cfg.Retry, retry.WallClock{}, retry.MathRand{})
 
+	ln, err := net.Listen("tcp", cfg.HTTPAddr)
+	if err != nil {
+		log.Error("listen", "err", err)
+		return 1
+	}
 	srv := &http.Server{
-		Addr:              cfg.HTTPAddr,
 		Handler:           httpapi.New(httpapi.Deps{Store: db, Logger: log, Retry: cfg.Retry}),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
@@ -44,8 +57,8 @@ func main() {
 	}
 	errCh := make(chan error, 1)
 	go func() {
-		log.Info("listening", "addr", cfg.HTTPAddr)
-		errCh <- srv.ListenAndServe()
+		log.Info("listening", "addr", ln.Addr().String())
+		errCh <- srv.Serve(ln)
 	}()
 
 	select {
@@ -54,12 +67,14 @@ func main() {
 		defer cancel()
 		if err := srv.Shutdown(shutdown); err != nil {
 			log.Error("shutdown", "err", err)
-			os.Exit(1)
+			return 1
 		}
+		return 0
 	case err := <-errCh:
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Error("server", "err", err)
-			os.Exit(1)
+			return 1
 		}
+		return 0
 	}
 }
